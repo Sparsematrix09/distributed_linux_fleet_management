@@ -1,0 +1,33 @@
+﻿{% extends "base.html" %}
+
+{% block content %}
+<div class="card">
+    <h2> Audit Log</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Timestamp</th>
+                <th>Node</th>
+                <th>Action</th>
+                <th>Status</th>
+                <th>Message</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for log in logs %}
+            <tr>
+                <td>{{ log.timestamp[:19] }}</td>
+                <td>{{ log.node_name or 'N/A' }} ({{ log.node_ip or 'N/A' }})</td>
+                <td>{{ log.action }}</td>
+                <td class="status-{{ log.status }}">{{ log.status }}</td>
+                <td>{{ log.message }}</td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="5" style="text-align: center;">No audit logs found.</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

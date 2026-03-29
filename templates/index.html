@@ -1,0 +1,70 @@
+﻿{% extends "base.html" %}
+
+{% block content %}
+<div class="stats">
+    <div class="stat-card">
+        <div class="stat-number">{{ nodes|length }}</div>
+        <div class="stat-label">Total Nodes</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">{{ nodes|selectattr('status', 'equalto', 'online')|list|length }}</div>
+        <div class="stat-label">Online Nodes</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">{{ prometheus_nodes|length }}</div>
+        <div class="stat-label">Prometheus Targets</div>
+    </div>
+</div>
+
+<div class="card">
+    <h2>📡 Managed Nodes</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Name</th>
+                <th>IP Address</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th>Onboarded</th>
+                <th>Last Seen</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for node in nodes %}
+            <tr>
+                <td>{{ node.id }}</td>
+                <td><strong>{{ node.name }}</strong></td>
+                <td>{{ node.ip }}</td>
+                <td>{{ node.node_type }}</td>
+                <td class="status-{{ node.status }}">{{ node.status }}</td>
+                <td>{{ node.onboarded_at[:19] if node.onboarded_at else 'N/A' }}</td>
+                <td>{{ node.last_seen[:19] if node.last_seen else 'Never' }}</td>
+                <td>
+                    <form action="/reboot/{{ node.id }}" method="post" style="display: inline;">
+                        <button type="submit" class="btn-reboot" onclick="return confirm('Reboot {{ node.name }}?')">Reboot</button>
+                    </form>
+                    <form action="/remove/{{ node.id }}" method="post" style="display: inline;">
+                        <button type="submit" class="btn-remove" onclick="return confirm('Remove {{ node.name }} from fleet?')">Remove</button>
+                    </form>
+                </td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="8" style="text-align: center;">No nodes onboarded yet. Click "Onboard Node" to add your first node.</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="card">
+    <h2> Monitoring Links</h2>
+    <ul>
+        <li><a href="http://localhost:9090/targets" target="_blank">Prometheus Targets</a> - Check if all nodes are being scraped</li>
+        <li><a href="http://localhost:9090/graph" target="_blank">Prometheus Graph</a> - Run PromQL queries</li>
+        <li><a href="http://localhost:3000" target="_blank">Grafana</a> - Visualize metrics (admin/admin)</li>
+    </ul>
+</div>
+{% endblock %}
