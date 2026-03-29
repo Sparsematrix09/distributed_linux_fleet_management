@@ -95,8 +95,8 @@ Allocate & Associate with instance
 ```
 <table>
   <tr>
-    <td><img src="screenshots/dashboard.png" width="400"/></td>
-    <td><img src="screenshots/prometheus.png" width="400"/></td>
+    <td><img src="web ui.png" width="400"/></td>
+    <td><img src="prom.png" width="400"/></td>
   </tr>
   <tr>
     <td align="center">Dashboard</td>
