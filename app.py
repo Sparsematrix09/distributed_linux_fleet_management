@@ -42,7 +42,6 @@ def test_node_connectivity(ip, node_type):
 
         url = f"http://{host}:{port}/metrics"
 
-        # 👇 IMPORTANT FIXES
         res = requests.get(
             url,
             timeout=5,
@@ -97,65 +96,93 @@ def onboard():
     if request.method == 'GET':
         return render_template('onboard.html')
     
-    # Get form data
     node_ip = request.form.get('ip')
     node_name = request.form.get('name', node_ip)
+    node_type = request.form.get('node_type')
+
     username = request.form.get('username')
     password = request.form.get('password')
     use_key = request.form.get('use_key') == 'on'
-    
-    if not all([node_ip, username]):
-        flash('IP address and username are required', 'error')
+
+    if not node_ip or not node_type:
+        flash('IP and node type are required', 'error')
         return redirect(url_for('onboard'))
-    
+
     try:
-        # Check if node already exists
         conn = get_db()
-        existing = conn.execute('SELECT id FROM nodes WHERE ip = ?', (node_ip,)).fetchone()
+
+        existing = conn.execute(
+            'SELECT id FROM nodes WHERE ip = ?', (node_ip,)
+        ).fetchone()
+
         if existing:
-            flash(f'Node {node_ip} already exists in the fleet', 'error')
+            flash(f'Node {node_ip} already exists', 'error')
             conn.close()
             return redirect(url_for('onboard'))
-        
-        # Establish SSH connection
+
+        # CASE 1: DOCKER (NO SSH)
+        if node_type == 'docker':
+            cursor = conn.execute(
+                '''INSERT INTO nodes 
+                (name, ip, node_type, status) 
+                VALUES (?, ?, ?, ?)''',
+                (node_name, node_ip, 'docker', 'online')
+            )
+
+            conn.commit()
+            conn.close()
+
+            prometheus_manager.add_node(node_ip)
+
+            flash(f'Docker node {node_ip} added successfully!', 'success')
+            return redirect(url_for('index'))
+
+        # AWS / CUSTOM → SSH REQUIRED
+        if not username:
+            flash('SSH username required for this node type', 'error')
+            return redirect(url_for('onboard'))
+
         key_path = Config.EC2_KEY_PATH if use_key else None
-        ssh_manager = SSHManager(node_ip, username, password, key_path)
-        
-        if not ssh_manager.connect():
-            flash(f'SSH connection failed to {node_ip}. Check credentials and network.', 'error')
-            conn.close()
-            return redirect(url_for('onboard'))
-        
-        # Install Node Exporter
-        output, error = ssh_manager.install_node_exporter()
-        
-        if error and 'error' in error.lower():
-            flash(f'Node Exporter installation failed: {error}', 'error')
-            ssh_manager.close()
-            conn.close()
-            return redirect(url_for('onboard'))
-        
-        ssh_manager.close()
-        
-        # Add to database
-        cursor = conn.execute(
-            'INSERT INTO nodes (name, ip, node_type, username, password, status) VALUES (?, ?, ?, ?, ?, ?)',
-            (node_name, node_ip, 'custom', username, password if not use_key else None, 'online')
+
+        ssh_manager = SSHManager(
+            hostname=node_ip,
+            username=username,
+            password=password,
+            key_path=key_path
         )
-        node_id = cursor.lastrowid
+
+        if not ssh_manager.connect():
+            flash(f'SSH connection failed to {node_ip}', 'error')
+            return redirect(url_for('onboard'))
+
+        output, error = ssh_manager.install_node_exporter()
+
+        if error and 'error' in error.lower():
+            flash(f'Installation failed: {error}', 'error')
+            ssh_manager.close()
+            return redirect(url_for('onboard'))
+
+        ssh_manager.close()
+
+        # Save node
+        cursor = conn.execute(
+            '''INSERT INTO nodes 
+            (name, ip, node_type, username, password, status)
+            VALUES (?, ?, ?, ?, ?, ?)''',
+            (node_name, node_ip, node_type, username,
+             password if not use_key else None, 'online')
+        )
+
         conn.commit()
-        
-        # Add to Prometheus
+        conn.close()
+
         prometheus_manager.add_node(node_ip)
-        
-        # Log audit
-        log_audit(node_id, 'onboard', 'success', f'Node {node_ip} onboarded successfully')
-        
+
         flash(f'Node {node_ip} onboarded successfully!', 'success')
         return redirect(url_for('index'))
-        
+
     except Exception as e:
-        flash(f'Error onboarding node: {str(e)}', 'error')
+        flash(f'Error: {str(e)}', 'error')
         return redirect(url_for('onboard'))
 
 @app.route('/reboot/<int:node_id>', methods=['POST'])
@@ -169,34 +196,72 @@ def reboot_node(node_id):
         flash('Node not found', 'error')
         return redirect(url_for('index'))
     
+    # extract host (remove :port if present)
+    if ':' in node['ip']:
+        host = node['ip'].split(':')[0]
+    else:
+        host = node['ip']
+
     try:
-        # Connect via SSH
-        ssh_manager = SSHManager(node['ip'], node['username'], node['password'])
-        
-        if not ssh_manager.connect():
-            flash(f'SSH connection failed to {node["ip"]}', 'error')
+        # handle different node types
+        if node['node_type'] == 'docker':
+            try:
+                container_name = node['name']  # must match docker container name
+
+                subprocess.run(
+                    ["docker", "restart", container_name],
+                    check=True
+                )
+
+                log_audit(node_id, 'restart', 'success', f'Docker container {container_name} restarted')
+                flash(f'Docker node {container_name} restarted successfully', 'success')
+
+            except Exception as e:
+                flash(f'Error restarting Docker node: {str(e)}', 'error')
+                log_audit(node_id, 'restart', 'failed', str(e))
+
             return redirect(url_for('index'))
-        
-        # Execute reboot
+
+        elif node['node_type'] == 'aws':
+            # 🔥 Use PEM key for AWS
+            ssh_manager = SSHManager(
+                hostname=host,
+                username=node['username'],
+                key_path=Config.EC2_KEY_PATH
+            )
+        else:
+            # Custom nodes (password-based)
+            ssh_manager = SSHManager(
+                hostname=host,
+                username=node['username'],
+                password=node['password']
+            )
+
+        # connect
+        if not ssh_manager.connect():
+            flash(f'SSH connection failed to {host}', 'error')
+            return redirect(url_for('index'))
+
+        # exec reboot
         output, error = ssh_manager.reboot_node()
         ssh_manager.close()
-        
-        # Update database
+
+        # Update DB
         conn = get_db()
-        conn.execute('UPDATE nodes SET last_reboot = ? WHERE id = ?',
-                    (datetime.now().isoformat(), node_id))
+        conn.execute(
+            'UPDATE nodes SET last_reboot = ? WHERE id = ?',
+            (datetime.now().isoformat(), node_id)
+        )
         conn.commit()
         conn.close()
-        
-        # Log audit
-        log_audit(node_id, 'reboot', 'success', f'Reboot command sent to {node["ip"]}')
-        
-        flash(f'Reboot command sent to {node["name"]} ({node["ip"]})', 'success')
-        
+
+        log_audit(node_id, 'reboot', 'success', f'Reboot sent to {host}')
+        flash(f'Reboot command sent to {node["name"]} ({host})', 'success')
+
     except Exception as e:
         flash(f'Error rebooting node: {str(e)}', 'error')
         log_audit(node_id, 'reboot', 'failed', str(e))
-    
+
     return redirect(url_for('index'))
 
 @app.route('/remove/<int:node_id>', methods=['POST'])
@@ -209,15 +274,12 @@ def remove_node(node_id):
         flash('Node not found', 'error')
         return redirect(url_for('index'))
     
-    # Remove from Prometheus
     prometheus_manager.remove_node(node['ip'])
     
-    # Remove from database
     conn.execute('DELETE FROM nodes WHERE id = ?', (node_id,))
     conn.commit()
     conn.close()
     
-    # Log audit
     log_audit(node_id, 'remove', 'success', f'Node {node["ip"]} removed from fleet')
     
     flash(f'Node {node["name"]} ({node["ip"]}) removed from fleet', 'success')
@@ -259,20 +321,32 @@ def audit_log():
     return render_template('audit.html', logs=logs)
 
 if __name__ == '__main__':
-    # Initialize database
     from init_db import init_database
     init_database()
     
-    # Add pre-configured Docker nodes to database if they don't exist
     conn = get_db()
+
     for docker_node in Config.DOCKER_NODES:
-        existing = conn.execute('SELECT id FROM nodes WHERE ip = ?', (docker_node['ip'],)).fetchone()
+        existing = conn.execute(
+            'SELECT id FROM nodes WHERE ip = ?',
+            (docker_node['ip'],)
+        ).fetchone()
+
         if not existing:
             conn.execute(
-                'INSERT INTO nodes (name, ip, node_type, username, password, status) VALUES (?, ?, ?, ?, ?, ?)',
-                (docker_node['name'], docker_node['ip'], 'docker', docker_node['username'], docker_node['password'], 'online')
+                '''INSERT INTO nodes 
+                (name, ip, node_type, status) 
+                VALUES (?, ?, ?, ?)''',
+                (
+                    docker_node['name'],
+                    docker_node['ip'],
+                    'docker',
+                    'online'
+                )
             )
+
             prometheus_manager.add_node(docker_node['ip'])
+
     conn.commit()
     conn.close()
     

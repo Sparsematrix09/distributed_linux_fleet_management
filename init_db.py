@@ -2,16 +2,12 @@
 import os
 from config import Config
 
-def init_database():
-    
-    # Ensure database directory exists
-    os.makedirs(os.path.dirname(Config.DATABASE_PATH), exist_ok=True)
-    
-    # Connect to database
+def init_database():    
+    os.makedirs(os.path.dirname(Config.DATABASE_PATH), exist_ok=True)    
     conn = sqlite3.connect(Config.DATABASE_PATH)
     cursor = conn.cursor()
     
-    # Create nodes table
+    # nodes table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS nodes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -28,7 +24,7 @@ def init_database():
         )
     ''')
     
-    # Create audit_log table
+    # audit_log table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS audit_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

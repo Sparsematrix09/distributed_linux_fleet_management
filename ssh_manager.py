@@ -14,28 +14,30 @@ class SSHManager:
         try:
             self.client = paramiko.SSHClient()
             self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            
+
+            # FIX: remove port if present
+            host = self.hostname.split(':')[0]
+
             if self.key_path and os.path.exists(self.key_path):
-                # Use key-based authentication
                 key = paramiko.RSAKey.from_private_key_file(self.key_path)
                 self.client.connect(
-                    self.hostname,
+                    host,
                     username=self.username,
                     pkey=key,
                     timeout=30
                 )
             elif self.password:
-                # Use password authentication
                 self.client.connect(
-                    self.hostname,
+                    host,
                     username=self.username,
                     password=self.password,
                     timeout=30
                 )
             else:
                 raise Exception("No authentication method provided")
-            
+
             return True
+
         except Exception as e:
             print(f"SSH connection failed to {self.hostname}: {e}")
             return False
